@@ -1,0 +1,31 @@
+# dsh-llm-approver bundle patch: mounts the LLM approval gate and adds the
+# `workspace-write-llm` permission preset to the profile layer stack.
+# Runtime defaults live at the plugin's config boundary; users override them
+# in their profile cordis.patch.yml row with the same id (`llm-approver`).
+- insert:
+    - id: llm-approver
+      name: '@dsh-external/dsh-llm-approver'
+
+# Restate the full preset table: a patch replaces a row's whole `config`
+# rather than merging into it. The first three entries mirror dsh-base;
+# `workspace-write-llm` shares the workspace-write knob bundle and is told
+# apart from `workspace-write` only by the recorded `permission/preset`
+# selection, so it must be declared AFTER `workspace-write` to keep the
+# empty-log default inference unchanged.
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+      workspace-write-llm:
+        sandbox: workspace-write
+        approval: ask
+        name: 'Workspace Write · LLM Review'
+        description: 'Like workspace-write, but sandbox-escalation approvals are pre-reviewed by an independent-context LLM: obviously safe escalations are allowed without prompting you; anything else still asks.'
