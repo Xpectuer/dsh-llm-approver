@@ -17,24 +17,92 @@ synchronously with zero behavior change.
 
 ## Installation
 
-Add the bundle to a profile (e.g. `~/.dsh/profiles/web/package.json`):
+Requires `dsh` with a profile (`~/.dsh/profiles/web` for the web GUI) and
+`pnpm` available.
+
+**1. Add the bundle to your profile** — edit
+`~/.dsh/profiles/web/package.json`:
 
 ```json
 {
-  "dsh": { "profile": { "bundles": [..., "@dsh-external/dsh-llm-approver"] } },
-  "dependencies": { "@dsh-external/dsh-llm-approver": "file:<path-to-this-dir>" }
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@dsh-external/dsh-llm-approver"
+      ]
+    }
+  },
+  "dependencies": {
+    "@dsh-external/dsh-llm-approver": "github:Xpectuer/dsh-llm-approver"
+  }
 }
 ```
 
-Then `pnpm install` in the profile directory and restart `dsh web`.
+For local development instead of GitHub, use a file reference:
+`"@dsh-external/dsh-llm-approver": "file:/path/to/dsh-llm-approver"`.
+
+**2. Install and verify**
+
+```bash
+cd ~/.dsh/profiles/web
+pnpm install
+dsh web --dump-config | grep -A2 llm-approver   # row must appear
+# the preset table must contain workspace-write-llm:
+dsh web --dump-config | grep workspace-write-llm
+```
+
+**3. Restart** `dsh web` (the web profile has no HMR; a restart is the only
+way to load a new bundle). A second instance for testing can be started
+without touching the running one: `dsh web --port 3081`.
+
+> **Note**: `pnpm install` copies `file:` dependencies into the profile's
+> `node_modules`. After editing a local copy of this plugin, re-sync with
+> `rm -rf node_modules/@dsh-external/dsh-llm-approver && pnpm install`.
+
+**Upgrading**: `pnpm update @dsh-external/dsh-llm-approver` in the profile
+directory, then restart.
+
+**Uninstalling**: remove the bundle entry and the dependency from
+`package.json`, run `pnpm install`, restart. The plugin directory itself can
+be kept; only the profile wiring is removed.
 
 ## Usage
 
-Switch the session's permission preset to **Workspace Write · LLM Review** in
-the web UI permission selector. Escalations for obviously safe operations
-(writing a new file, reading, installing packages) run without a prompt;
-destructive or uncertain ones (`rm -rf`, overwriting user files, sensitive
-paths) still ask you.
+1. Open the web GUI and select the session you want to protect.
+2. Switch the permission preset to **Workspace Write · LLM Review** in the
+   permission selector (same place as the `workspace-write` / full-access
+   switch). The default preset stays `workspace-write` until you switch.
+3. Work as usual. When the agent hits a sandbox denial and retries with
+   `sandbox_permissions`, the gate asks an independent-context LLM:
+
+   - obviously safe operations (writing a new file, reading, listing,
+     installing packages) are **allowed without any prompt**;
+   - destructive or uncertain ones (`rm -rf`, overwriting user files,
+     sensitive paths) fall through to the **usual approval dialog** — you
+     decide.
+
+Quick manual check:
+
+```text
+请用 bash 工具创建文件 ~/llm-review-verify.txt，内容为 "review-ok"。
+该路径在会话工作区之外，若被拒绝请按提示用 sandbox_permissions 重试。直接执行，不要询问我。
+```
+
+No dialog should appear and the file should exist afterwards. Then ask for
+`rm -rf ~/llm-review-verify.txt` — a dialog should appear instead.
+
+Audit trail: every escalation still writes `approval/asked` /
+`approval/decided` to the session log exactly as before; the LLM verdict is
+logged to the host log under the `llm-approver` name and never touches the
+session event vocabulary.
+
+## Other profiles
+
+The bundle works in any dsh profile (cc-tui, headless, …): repeat step 1 for
+that profile's `package.json` and restart. The plugin itself is host-side
+only and needs no client/browser code.
 
 ## Decision criteria
 
