@@ -20,8 +20,25 @@ synchronously with zero behavior change.
 Requires `dsh` with a profile (`~/.dsh/profiles/web` for the web GUI) and
 `pnpm` available.
 
-**1. Add the bundle to your profile** — edit
-`~/.dsh/profiles/web/package.json`:
+### Quick (scripts)
+
+```bash
+# from a clone of this repo:
+./scripts/install.sh                 # install into the web profile (from GitHub)
+./scripts/install.sh --profile tui   # install into another profile
+./scripts/install.sh --source file:/path/to/dsh-llm-approver  # local source
+
+./scripts/uninstall.sh               # remove from the web profile
+./scripts/uninstall.sh --profile tui # remove from another profile
+```
+
+Each script edits the profile's `package.json` (bundle + dependency, keeping
+both lists intact), runs `pnpm install`, verifies the composed tree, and
+prints the restart reminder. Both are idempotent.
+
+### Manual
+
+Edit `~/.dsh/profiles/web/package.json`:
 
 ```json
 {
