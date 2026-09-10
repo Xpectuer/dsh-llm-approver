@@ -77,6 +77,16 @@ without touching the running one: `dsh web --port 3081`.
 > **Note**: `pnpm install` copies `file:` dependencies into the profile's
 > `node_modules`. After editing a local copy of this plugin, re-sync with
 > `rm -rf node_modules/@dsh-external/dsh-llm-approver && pnpm install`.
+>
+> For a single-file iteration the installed files are pnpm hard links (link
+> count > 1), so replace the file by rename instead of writing through it —
+> an in-place edit would mutate the shared store copy:
+>
+> ```bash
+> SRC=~/workspace/dsh-llm-approver/lib/index.js
+> T=~/.dsh/profiles/web/node_modules/@dsh-external/dsh-llm-approver/lib/index.js
+> cat "$SRC" > "$T.new" && mv "$T.new" "$T"
+> ```
 
 **Upgrading**: `pnpm update @dsh-external/dsh-llm-approver` in the profile
 directory, then restart.
@@ -167,6 +177,7 @@ Live E2E helpers (against a running `dsh web` instance, no browser needed):
 | LLM timeout / error / no ALLOW / tool-call output | User approval prompt |
 | User interrupts during review | Defer to user; service resolves `cancelled` |
 | Missing `callId` or no matching `tool/call` event | User approval prompt |
+| Gate cannot read the session (harness API drift, missing projection) | User approval prompt |
 | `approval/policy = never` | Rejected by the service before this gate runs |
 | Plugin row fails to load | The `permission` preset row is independent and still applies |
 

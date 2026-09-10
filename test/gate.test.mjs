@@ -8,6 +8,8 @@
  * dispatch path dsh-user-approval uses.
  *
  * Run:  node ~/.dsh/profiles/web/node_modules/@dsh-external/dsh-llm-approver/test/gate.test.mjs
+ * (or from this repo, with `node_modules/@deepseek-ai/*` symlinked to a dsh
+ * install: `node test/gate.test.mjs`)
  */
 
 import { Context } from '@deepseek-ai/cordis';
@@ -44,21 +46,38 @@ function llmStub(script) {
   };
 }
 
-/** permissionPresets stub: current() returns the scripted preset. */
-function presetsStub(current) {
-  return { current: () => current };
+/**
+ * permissionPresets stub mirroring the real 0.1.5 contract: `current()` takes
+ * the SESSION and folds its `permissions` projection. Handed an event array or
+ * `undefined` — what the 0.1.1 API took — the real service throws, so this stub
+ * throws too: the drift cannot pass silently.
+ * @param current - preset name, or a function of the session.
+ * @param seen - collects every argument `current()` received.
+ */
+function presetsStub(current, seen = []) {
+  return {
+    current(session) {
+      seen.push(session);
+      if (session === undefined || typeof session.snapshotEvents !== 'function') {
+        throw new TypeError('permission: permissions session projection is not registered');
+      }
+      return typeof current === 'function' ? current(session) : current;
+    },
+  };
 }
 
 function makeSession(overrides = {}) {
+  const events = [
+    { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'please set up the test fixture' }] } },
+    { type: 'permission/preset', data: { preset: PRESET } },
+    { type: 'sandbox/mode', data: { mode: 'workspace-write' } },
+    { type: 'tool/call', data: { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{"command":"echo hi > ~/sandbox-test.txt"}' } },
+  ];
   return {
     id: 'test-session',
     header: { cwd: '/Users/zhengjiaye/workspace' },
-    events: [
-      { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'please set up the test fixture' }] } },
-      { type: 'permission/preset', data: { preset: PRESET } },
-      { type: 'sandbox/mode', data: { mode: 'workspace-write' } },
-      { type: 'tool/call', data: { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{"command":"echo hi > ~/sandbox-test.txt"}' } },
-    ],
+    // The real Session exposes its log through snapshotEvents(), not `.events`.
+    snapshotEvents: () => events,
     requestHeader: () => ({ config: { provider: 'stub-provider', model: 'stub-model' } }),
     ...overrides,
   };
@@ -75,13 +94,20 @@ function makeReq(session, overrides = {}) {
 }
 
 /** Boot a fresh context with the given stubs and run one waterfall dispatch. */
-async function dispatch({ preset = PRESET, script = {}, req }) {
+async function dispatch({ preset = PRESET, script = {}, req, presets }) {
   const ctx = new Context();
   const llm = llmStub(script);
   ctx.provide('llm', llm);
-  ctx.provide('permissionPresets', presetsStub(preset));
+  ctx.provide('permissionPresets', presets ?? presetsStub(preset));
   await ctx.plugin(plugin);
-  const outcome = await ctx.waterfall('approval/request', req, () => Promise.resolve('user-decides'));
+  let outcome;
+  try {
+    outcome = await ctx.waterfall('approval/request', req, () => Promise.resolve('user-decides'));
+  } catch (error) {
+    // A throwing listener is what dsh-user-approval folds to 'unavailable'
+    // (fail closed) — surface it as a distinguishable outcome, not a crash.
+    outcome = `threw:${error.message}`;
+  }
   ctx.fiber.dispose();
   return { outcome, llmCalls: llm.state.calls };
 }
@@ -185,6 +211,40 @@ async function dispatch({ preset = PRESET, script = {}, req }) {
   await ctx.waterfall('approval/request', makeReq(session), () => Promise.resolve('user-decides'));
   ctx.fiber.dispose();
   check('non-deepseek route sends no reasoningEffort', llm.state.options[0].reasoningEffort, undefined);
+}
+
+// 13. Regression: the gate must use the harness session API of 0.1.5-rc.2 —
+// `presets.current(session)` over `session.snapshotEvents()`. Passing the event
+// array (the 0.1.1-rc.2 contract) throws in the stub above, as it does in the
+// real service, so this case fails loudly instead of silently deferring.
+{
+  const seen = [];
+  const ctx = new Context();
+  const llm = llmStub({ text: 'ALLOW' });
+  ctx.provide('llm', llm);
+  ctx.provide('permissionPresets', presetsStub(PRESET, seen));
+  await ctx.plugin(plugin);
+  let outcome;
+  try {
+    outcome = await ctx.waterfall('approval/request', makeReq(makeSession()), () => Promise.resolve('user-decides'));
+  } catch (error) {
+    outcome = `threw:${error.message}`;
+  }
+  ctx.fiber.dispose();
+  check('gate speaks the current(session) contract', outcome, 'allowed-once');
+  check('current() received the session', typeof seen[0]?.snapshotEvents, 'function');
+}
+
+// 14. A gate that throws (harness API drift) must defer to the user, never fail
+// closed: dsh-user-approval folds a throwing listener to 'unavailable', which
+// rejects the escalation outright instead of asking.
+{
+  const { outcome, llmCalls } = await dispatch({
+    presets: { current() { throw new TypeError('permission: permissions session projection is not registered'); } },
+    req: makeReq(makeSession()),
+  });
+  check('throwing gate defers to user instead of failing closed', outcome, 'user-decides');
+  check('throwing gate never calls the LLM', llmCalls, 0);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
